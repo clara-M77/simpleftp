@@ -1,11 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
-
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
 #include <err.h>
-
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -26,10 +24,11 @@ bool recv_msg(int sd, int code, char *text) {
 
     // receive the answer
 
-
+    recv_s = recv(sd, buffer, BUFSIZE-1, 0);
     // error checking
     if (recv_s < 0) warn("error receiving data");
     if (recv_s == 0) errx(1, "connection closed by host");
+    buffer[recv_s] = '\0';
 
     // parsing the code and message receive from the answer
     sscanf(buffer, "%d %[^\r\n]\r\n", &recv_code, message);
@@ -39,7 +38,6 @@ bool recv_msg(int sd, int code, char *text) {
     // boolean test for the code
     return (code == recv_code) ? true : false;
 }
-
 /**
  * function: send command formated to the server
  * sd: socket descriptor
@@ -56,9 +54,12 @@ void send_msg(int sd, char *operation, char *param) {
         sprintf(buffer, "%s\r\n", operation);
 
     // send command and check for errors
+    if(send(sd, buffer, strlen(buffer), 0) == -1){
+        perror("sending command");
+        return;
+    }
 
 }
-
 /**
  * function: simple input from keyboard
  * return: input without ENTER key
@@ -84,16 +85,17 @@ void authenticate(int sd) {
     input = read_input();
 
     // send the command to the server
-    
+    send_msg(sd, "USER", input);
     // relese memory
     free(input);
 
     // wait to receive password requirement and check for errors
-
+    bool result = recv_msg(sd, 331, NULL);
 
     // ask for password
     printf("passwd: ");
     input = read_input();
+    send_msg(sd, "PASS", input);
 
     // send the command to the server
 
@@ -102,6 +104,8 @@ void authenticate(int sd) {
     free(input);
 
     // wait for answer and process it and check for errors
+    result = recv_msg(sd, 230, desc);
+    if(!result){ printf("%s\n", desc); return 1;}
 
 }
 
@@ -116,9 +120,12 @@ void get(int sd, char *file_name) {
     FILE *file;
 
     // send the RETR command to the server
-
+    send_msg(sd, "RETR", file_name);
     // check for the response
-
+    if(!(recv_msg(sd, 299, NULL))){
+        perror("file not found or not available");
+        return 1;
+    }
     // parsing the file size from the answer received
     // "File %s size %ld bytes"
     sscanf(buffer, "File %*s size %d bytes", &f_size);
@@ -185,19 +192,48 @@ void operate(int sd) {
  **/
 int main (int argc, char *argv[]) {
     int sd;
-    struct sockaddr_in addr;
+    struct sockaddr_in foreignAddr;
 
     // arguments checking
+    /* client must receive IP address + port where server is listening */
+    if (argc != 3) {
+    	printf("ERROR: enter IP address and port.\n");
+    	return -1;
+    }
 
     // create socket and check for errors
-    
-    // set socket data    
+    sd = socket(PF_INET, SOCK_STREAM, 0);	/* creates the socket and returns its file descriptor */
+    if (sd < 0) {
+    	printf("ERROR: failed to create socket.\n");
+    	return -1;
+    }
+
+    // set socket data
+    foreignAddr.sin_family = AF_INET; /* Internet Protocol address family */
+    foreignAddr.sin_port = htons(atoi(argv[2]));
+    inet_aton(argv[1], &foreignAddr.sin_addr);
+    /**
+     * inet_aton converts the first argument of main to a network address
+     * and stores it in the structure that contains the address data of the socket
+     **/
 
     // connect and check for errors
+    /* connect() is blocking */
+    if(connect(sd, (struct sockaddr *) &foreignAddr, sizeof(foreignAddr)) < 0) {
+    	printf("ERROR: failed to connect.\n");
+    	return -1;
+    }
 
     // if receive hello proceed with authenticate and operate if not warning
+    if(!recv_msg(sd, 220, NULL)) {
+    	warn("ERROR: hello message was not received.\n");
+    } else {
+        authenticate(sd);
+        operate(sd);
+    }
 
     // close socket
+    close(sd);
 
     return 0;
 }
